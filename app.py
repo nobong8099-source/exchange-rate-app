@@ -36,11 +36,37 @@ import platform
 import json
 from pathlib import Path
 
-# ── 폰트 설정 ──────────────────────────────────────────────────────────────────
-if platform.system() == "Windows":
-    rcParams["font.family"] = "Malgun Gothic"
-else:
+# ── 한글 폰트 설정 ────────────────────────────────────────────────────────────
+import matplotlib.font_manager as _fm
+
+def _set_korean_font():
+    if platform.system() == "Windows":
+        # Windows: 맑은 고딕
+        rcParams["font.family"] = "Malgun Gothic"
+        return
+
+    # Linux(Streamlit Cloud): 나눔고딕 직접 등록
+    # packages.txt 에 fonts-nanum 추가 시 아래 경로에 설치됨
+    _nanum_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+    if Path(_nanum_path).exists():
+        _fm.fontManager.addfont(_nanum_path)
+        _prop = _fm.FontProperties(fname=_nanum_path)
+        rcParams["font.family"] = _prop.get_name()
+        return
+
+    # 시스템에 설치된 Nanum 계열 폰트 자동 탐색
+    _candidates = [f.fname for f in _fm.fontManager.ttflist
+                   if "nanum" in f.name.lower() or "gothic" in f.name.lower()]
+    if _candidates:
+        _fm.fontManager.addfont(_candidates[0])
+        _prop = _fm.FontProperties(fname=_candidates[0])
+        rcParams["font.family"] = _prop.get_name()
+        return
+
+    # 폴백: DejaVu Sans (한글 깨짐 방지용 경고)
     rcParams["font.family"] = "DejaVu Sans"
+
+_set_korean_font()
 rcParams["axes.unicode_minus"] = False
 rcParams["figure.dpi"] = 120  # 모바일 레티나 대응
 
