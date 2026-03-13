@@ -1,7 +1,14 @@
 import warnings
 warnings.filterwarnings("ignore")
 
-# SSL 인증서 문제 우회 (기업/학교 네트워크의 자체 서명 인증서 대응)
+# ── SSL 우회: 환경변수로 먼저 끄고 (Linux/Streamlit Cloud 대응)
+#    curl_cffi가 임포트되기 전에 설정해야 함
+import os
+os.environ["CURL_CA_BUNDLE"]    = ""
+os.environ["REQUESTS_CA_BUNDLE"] = ""
+os.environ["SSL_CERT_FILE"]     = ""
+
+# ── SSL 우회: curl_cffi Session 레벨에서도 verify=False (Windows 대응)
 try:
     import curl_cffi.requests as _curl_requests
     _orig_session_init = _curl_requests.Session.__init__
@@ -20,6 +27,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import rcParams
 from datetime import datetime, timedelta
+import time
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -262,27 +270,36 @@ if "settings_loaded" not in st.session_state:
 
 # ── 데이터 로드 ────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
-def load_data(ticker: str, start: str, end: str) -> pd.DataFrame:
-    try:
-        df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
-    except Exception as e:
-        st.error(f"데이터 수신 오류: {e}")
-        return pd.DataFrame()
+def load_data(ticker: str, start: str, end: str):
+    """(DataFrame, error_msg) 튜플 반환. 실패 시 빈 DataFrame + 오류 문자열."""
+    last_err = ""
+    for attempt in range(3):
+        try:
+            df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+            if df.empty:
+                last_err = "Yahoo Finance 응답이 비어 있습니다 (rate limit 또는 잘못된 티커)."
+                if attempt < 2:
+                    time.sleep(1.5)
+                continue
 
-    if df.empty:
-        return pd.DataFrame()
+            if isinstance(df.columns, pd.MultiIndex):
+                close = df["Close"]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]
+                df = close.rename("Close").to_frame()
+            else:
+                df = df[["Close"]].copy()
+                df.columns = ["Close"]
 
-    if isinstance(df.columns, pd.MultiIndex):
-        close = df["Close"]
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-        df = close.rename("Close").to_frame()
-    else:
-        df = df[["Close"]].copy()
-        df.columns = ["Close"]
+            df.index = pd.to_datetime(df.index)
+            return df.dropna(), ""
 
-    df.index = pd.to_datetime(df.index)
-    return df.dropna()
+        except Exception as e:
+            last_err = str(e)
+            if attempt < 2:
+                time.sleep(1.5)
+
+    return pd.DataFrame(), last_err
 
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -409,10 +426,15 @@ end_date   = datetime.today()
 start_date = end_date - timedelta(days=history_days)
 
 with st.spinner("데이터 로딩 중..."):
-    df_raw = load_data(ticker, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+    df_raw, load_err = load_data(ticker, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 
 if df_raw.empty:
-    st.error("데이터를 불러올 수 없습니다. 설정에서 통화쌍을 다시 선택하거나 잠시 후 시도해주세요.")
+    st.error("데이터를 불러올 수 없습니다.")
+    if load_err:
+        st.code(load_err, language="")
+    if st.button("🔄 다시 시도", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
     st.stop()
 
 df = add_features(df_raw)
